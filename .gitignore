@@ -1,0 +1,46 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.venv/
+venv/
+ENV/
+env/
+.env
+.DS_Store
+*.swp
+*.swo
+*~
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local tooling / IDE (machine-specific, not project deliverables)
+.claude/
+.vscode/
+
+# Subagent-driven-development scratch/ledger (process artifacts)
+.superpowers/
+
+# Local run/trace/capture artifacts (regenerated locally, never source)
+mlflow.db
+mlruns/
+mlartifacts/
+.playwright-mcp/
+.isaac/

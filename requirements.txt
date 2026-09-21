@@ -1,0 +1,39 @@
+# Repo-root requirements for the Databricks Apps — the orchestrator (agent) app
+# installs from this file (its source_code_path is the repo root).
+#
+# PINNED to exact versions for reproducible deploys. Databricks Apps install with
+# pip from public PyPI; the internal Databricks pypi proxy does NOT work for Apps,
+# so pip + pinned versions is the supported path (NOT uv, whose Apps mode routes
+# installs through that broken proxy). uv still manages LOCAL development via
+# pyproject.toml.
+#
+# To refresh the pins from public PyPI (targeting the Apps Python 3.11 runtime):
+#   uv pip compile requirements.txt --python-version 3.11 -o /tmp/pinned.txt
+# then copy the resolved versions of the direct deps below.
+
+# Web framework (fastapi/uvicorn are pre-installed in the Apps runtime; pinned anyway for reproducibility)
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+pydantic==2.13.5
+
+# LangGraph agent + Lakebase Postgres checkpointer
+langgraph==1.2.11
+langgraph-checkpoint-postgres==3.1.2
+langchain==1.4.0
+langchain-core==1.6.3
+databricks-langchain==0.20.0
+# Transitive dep of databricks-langchain, pinned explicitly: the Unity AI Gateway
+# routing (use_ai_gateway) lives in databricks-openai, and the langchain pin only
+# requires >=0.14.0, so pin the tested version for reproducible deploys.
+databricks-openai==0.17.1
+
+# Lakebase driver + Databricks SDK (psycopg NOT pre-installed; sdk 0.81+ for the w.postgres module)
+psycopg[binary]==3.3.5
+databricks-sdk==0.139.0
+
+# MCP client + HTTP (orchestrator -> ServiceNow MCP)
+mcp==1.30.0
+httpx==0.28.1
+
+# Tracing
+mlflow==3.16.0

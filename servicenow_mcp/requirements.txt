@@ -1,0 +1,5 @@
+# Runtime deps for the ServiceNow MCP Databricks App (source_code_path = this dir).
+# PINNED for reproducible deploys — pip + public PyPI (the Databricks pypi proxy
+# does not work for Apps, so uv mode is not used here).
+mcp==1.30.0
+httpx==0.28.1

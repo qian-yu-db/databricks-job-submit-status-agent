@@ -1,0 +1,34 @@
+# Investigation Agent — Orchestrator Databricks App
+# Task 9 (deploy) will finalize valueFrom keys once resources are wired in the UI.
+# Placeholders below match the expected resource keys; update after Task 9 binding.
+
+command: ["uvicorn", "agent.app:app", "--host", "0.0.0.0", "--port", "8000"]
+
+env:
+  # ServiceNow MCP app URL — set after servicenow-mcp App is deployed (Task 9).
+  # valueFrom key "servicenow-mcp-url" references a secret resource.
+  - name: SERVICENOW_MCP_URL
+    valueFrom: "servicenow-mcp-url"   # TODO Task 9: bind to deployed MCP app URL secret
+
+  # SQL warehouse for real investigation queries (app-level, not per-user).
+  - name: WAREHOUSE_ID
+    value: "<your-sql-warehouse-id>"
+
+  # Unity Catalog table used for auth-event queries.
+  - name: AUTH_TABLE
+    value: "main.job_agent_demo.auth_events"
+
+  # Lakebase endpoint path for credential generation.
+  # Matches the postgres project provisioned by FEVM for this hackathon.
+  - name: LAKEBASE_ENDPOINT
+    value: "projects/job-agent/branches/production/endpoints/primary"
+
+  # PGHOST / PGDATABASE / PGUSER / PGPORT — auto-injected by the platform
+  # when Lakebase is attached as an app resource (resource key: "postgres").
+  # No explicit env entry needed for those; PGPASSWORD is NOT injected
+  # (short-lived token; fetched per-request via SDK generate_database_credential).
+
+# Per-user OBO scopes: ai-gateway enables MCP tool calls; sql enables Warehouse queries.
+user_api_scopes:
+  - ai-gateway
+  - sql

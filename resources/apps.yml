@@ -1,0 +1,62 @@
+resources:
+  apps:
+    # ServiceNow MCP (stub backend). Deploys from repo root so `servicenow_mcp`
+    # is an importable package for `python -m servicenow_mcp.server`.
+    servicenow_mcp:
+      name: servicenow-mcp
+      description: "ServiceNow MCP server (stub backend)."
+      # Own (nested) source dir: self-contained stub, distinct path from the
+      # orchestrator (two apps may not share a source_code_path).
+      source_code_path: ../servicenow_mcp
+      config:
+        command: ["python", "server.py"]
+        # This is the env the bundle deploys (it is authoritative for the deployed
+        # app; the source servicenow_mcp/app.yaml is only for standalone/local runs).
+        # To connect a real ServiceNow instance, flip SERVICENOW_BACKEND to "rest"
+        # and add SERVICENOW_INSTANCE here — see docs/servicenow-connect.md.
+        env:
+          - name: SERVICENOW_BACKEND
+            value: "stub"
+          # - name: SERVICENOW_BACKEND
+          #   value: "rest"
+          # - name: SERVICENOW_INSTANCE
+          #   value: "https://<your-instance>.service-now.com"
+          # Path A (single-token demo) also sets SERVICENOW_OBO_TOKEN; Path B
+          # (per-user OBO) wires _obo_token() instead — see the runbook.
+          # FastMCP streamable-http must bind 0.0.0.0 on the Apps port.
+          - name: FASTMCP_HOST
+            value: "0.0.0.0"
+          - name: FASTMCP_PORT
+            value: "8000"
+
+    # Investigation orchestrator (FastAPI). Deploys from repo root so
+    # `agent`, `common`, `servicenow_mcp` all import cleanly.
+    agent:
+      name: job-status-agent
+      description: "Investigation orchestrator (FastAPI)."
+      source_code_path: ..
+      # Per-user OBO scopes: MCP tool calls + warehouse queries as the caller.
+      user_api_scopes:
+        - ai-gateway
+        - sql
+      resources:
+        # Lakebase attach -> injects PGHOST/PGUSER/PGDATABASE/PGPORT + endpoint.
+        - name: postgres
+          postgres:
+            branch: projects/job-agent/branches/production
+            database: projects/job-agent/branches/production/databases/databricks-postgres
+            permission: CAN_CONNECT_AND_CREATE
+      config:
+        command: ["uvicorn", "agent.app:app", "--host", "0.0.0.0", "--port", "8000"]
+        env:
+          - name: WAREHOUSE_ID
+            value: "<your-sql-warehouse-id>"
+          - name: AUTH_TABLE
+            value: "main.job_agent_demo.auth_events"
+          - name: LAKEBASE_ENDPOINT
+            value: "projects/job-agent/branches/production/endpoints/primary"
+          - name: SERVICENOW_MCP_URL
+            value: "https://servicenow-mcp-<workspace-id>.<region>.databricksapps.com"
+          # Workspace MLflow experiment for agent traces (app SP has CAN_EDIT).
+          - name: MLFLOW_EXPERIMENT
+            value: "/Users/you@example.com/job-status-agent"

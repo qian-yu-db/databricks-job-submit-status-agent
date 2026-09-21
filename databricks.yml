@@ -1,0 +1,31 @@
+bundle:
+  name: job-submit-status-agent
+
+include:
+  - resources/*.yml
+
+# The whole repo is the app/job source so cross-package imports (agent, common,
+# servicenow_mcp, jobs) resolve. Keep heavyweight / non-runtime dirs out of the
+# synced tree (esp. .venv) to keep app uploads small.
+sync:
+  exclude:
+    - .venv/**
+    - .git/**
+    - .pytest_cache/**
+    - "**/__pycache__/**"
+    - docs/**
+    - .claude/**
+    - tests/**
+    - "*.md"
+    - uv.lock
+
+targets:
+  dev:
+    default: true
+    mode: development
+    # Do not mutate app/job names (dev mode's "[dev user]" prefix breaks the
+    # strict app naming rules); keep the explicit names in the resource files.
+    presets:
+      name_prefix: ""
+    # Pass your Databricks CLI profile on the command line:
+    #   databricks bundle deploy --profile <your-profile>

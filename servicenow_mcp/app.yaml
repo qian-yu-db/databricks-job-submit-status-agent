@@ -1,0 +1,8 @@
+command: ["uv", "run", "python", "-m", "servicenow_mcp.server"]
+env:
+  # NOTE: this file configures STANDALONE / local runs. The bundle-deployed app
+  # takes its env from resources/apps.yml (config.env) — edit there for a DAB deploy.
+  # "stub" = in-process ServiceNow stand-in (echoes the caller). To connect a real
+  # instance, flip to "rest" and set SERVICENOW_INSTANCE — see docs/servicenow-connect.md.
+  - name: SERVICENOW_BACKEND
+    value: "stub"

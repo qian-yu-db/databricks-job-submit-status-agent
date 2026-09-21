@@ -1,0 +1,64 @@
+resources:
+  jobs:
+    investigation_job:
+      name: investigation-job
+      description: "Runs a suspicious-login investigation and streams status to Lakebase."
+      # Allow concurrent investigations (multiple Slack users at once) to run in
+      # parallel instead of serializing; serverless scales per run. queue.enabled
+      # still absorbs bursts beyond this limit rather than dropping runs.
+      max_concurrent_runs: 10
+      tasks:
+        - task_key: investigate
+          spark_python_task:
+            python_file: ../jobs/investigation_job.py
+          environment_key: default
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "3"
+            dependencies:
+              - "psycopg[binary]>=3.1"
+              - "databricks-sdk>=0.81"
+      queue:
+        enabled: true
+
+    # Dedicated failing job (its own job_id) — the registry's failure_demo workflow
+    # points here so a deliberately failed run exercises the diagnosis path.
+    failure_demo_job:
+      name: failure-demo-job
+      description: "Demo-only: a deliberately failing investigation to exercise the diagnosis path."
+      max_concurrent_runs: 5
+      tasks:
+        - task_key: failure_demo
+          spark_python_task:
+            python_file: ../jobs/failure_demo_job.py
+          environment_key: default
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "3"
+            dependencies:
+              - "psycopg[binary]>=3.1"
+              - "databricks-sdk>=0.81"
+      queue:
+        enabled: true
+
+    sweeper_job:
+      name: sweeper-job
+      description: "Marks abandoned turns; scheduled sweep of the Lakebase turns table."
+      tasks:
+        - task_key: sweep
+          spark_python_task:
+            python_file: ../jobs/sweeper_job.py
+          environment_key: default
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "3"
+            dependencies:
+              - "psycopg[binary]>=3.1"
+              - "databricks-sdk>=0.81"
+      schedule:
+        quartz_cron_expression: "0 */15 * * * ?"
+        timezone_id: "UTC"
+        pause_status: UNPAUSED
