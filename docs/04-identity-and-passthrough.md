@@ -162,9 +162,12 @@ implementations:
   this path isn't exercised.
 
 Swapping to the **single-token** REST path is config-only (`SERVICENOW_BACKEND=rest`
-plus the instance URL and a token; no code change). **Per-user OBO** to ServiceNow —
-via a UC Connection and an AI Gateway MCP Service — additionally needs the caller's
-per-user token wired into `_obo_token()`; see
+plus the instance URL and a token; no code change). **Per-user OBO** to ServiceNow keeps
+the agent → MCP call **direct** (so the app sees the user via `x-forwarded-*`) and adds a
+UC HTTP Connection **to ServiceNow** whose per-user token is wired into `_obo_token()`.
+Registering the app as an AI Gateway MCP Service is a **parallel governance** layer — with
+an M2M connection it presents a shared service principal, *not* the end user, so it isn't
+the per-user identity path. See
 [Connecting a real ServiceNow instance](servicenow-connect.md).
 
 ## How the orchestrator calls it
