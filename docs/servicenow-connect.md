@@ -3,7 +3,7 @@
 By default the ServiceNow MCP app runs a **stub** backend: it accepts the tool
 call, echoes the authenticated caller, and returns a fake incident number. That's
 enough to prove the whole flow — investigate → status → **human approval** →
-"incident filed as the user" — without any ServiceNow at all.
+"incident filed" — without any ServiceNow at all.
 
 This guide is for the step you do once you *have* ServiceNow: pointing the MCP at a
 real instance so incidents are created there, ideally **as the calling user**.
@@ -19,27 +19,48 @@ flowchart LR
     mcp -->|"hop B: ServiceNow OAuth token"| snow[("Your ServiceNow<br/>instance")]
 ```
 
-- **Hop A** (user → MCP) is Databricks-native and already works: the orchestrator
-  passes the originating user through, and the incident is attributed to them
-  (`caller_id`). See [Identity & passthrough](04-identity-and-passthrough.md).
+- **Hop A** (user → MCP): today the orchestrator calls the MCP as **its own service
+  principal** and passes the originating user only as the `caller_id` tool argument
+  (attribution, not identity). See [Identity & passthrough](04-identity-and-passthrough.md).
 - **Hop B** (MCP → ServiceNow) is what you wire up here. The recommended form is
   **per-user OBO**: each user's Databricks identity is exchanged for a short-lived
-  ServiceNow token, so the incident is created *as that user* — the auditing and
-  access-control story ServiceNow customers want.
+  ServiceNow token, so the incident is created *as that user*.
 
-## Two paths
+## What files a ticket "as the actual user" (and what doesn't)
 
-| Path | Incident filed as | Status in this repo | Use when |
-|------|-------------------|---------------------|----------|
-| **A. Single service token** | one service account | **works today** (config-only) | a fast "it really hit ServiceNow" demo |
-| **B. Per-user OBO** (recommended) | the actual signed-in user | **target — needs token wiring** | the real security story |
+Who the MCP app sees as the caller depends entirely on **which identity the caller
+authenticated as** — the Databricks Apps proxy forwards that as `x-forwarded-email` /
+`x-forwarded-access-token`. Verified against the live app:
 
-> **What's implemented today:** the MCP's REST call to ServiceNow uses a bearer
-> token from `_obo_token()`, which currently returns the static `SERVICENOW_OBO_TOKEN`
-> — i.e. **Path A**. **Path B is the recommended architecture to finish, not a
-> config-only flip:** it needs `_obo_token()` wired to return the *caller's*
-> per-user token (see the gap note in Path B). Steps 1–3 set up the Databricks side;
-> step 4 is the code step.
+- a call routed **through the gateway** (with an **M2M** connection) arrives as the
+  **connection's service principal**;
+- a caller presenting a **user** OAuth token arrives as that **user**.
+
+And how the agent calls the MCP **today**: the orchestrator authenticates the hop with
+**its own service principal** (`_mcp_auth_headers()` → `WorkspaceClient().config.authenticate()`
+in `agent/app.py`). So **today — on *both* the direct and the gateway paths — the MCP app
+sees a service principal, not the end user**; the user travels only as `caller_id`.
+
+> **Consequence:** filing "as the actual user" requires a deliberate change to *put the
+> user's identity on the wire* — it does **not** happen for free on either path. The two
+> ways to do it are **B1** (managed, via the gateway) and **B2** (custom, app-side) below.
+
+> **First principle:** Databricks on-behalf-of gives your app a **Databricks** user
+> token — that is **not** a ServiceNow token. Something in the chain must exchange it
+> for a **per-user ServiceNow** OAuth token.
+
+## Paths
+
+| Path | Incident filed as | What you change | Use when |
+|------|-------------------|-----------------|----------|
+| **A. Single service token** | one service account | config only | a fast "it really hit ServiceNow" demo |
+| **B1. Per-user — managed** (AI Gateway, U2M) | the actual user | U2M-per-user connection + route the call *through* the gateway + token wiring | you want Databricks-managed OAuth/refresh, no secrets in app code |
+| **B2. Per-user — custom** (app-side OAuth) | the actual user | forward the user's token on the agent→MCP hop + app-side ServiceNow OAuth | you want it self-contained, no reliance on gateway injection |
+
+> **What's implemented today:** the REST call uses `_obo_token()` → static
+> `SERVICENOW_OBO_TOKEN` (**Path A**). B1/B2 are the architecture to finish (both need the
+> customer's ServiceNow instance). ServiceNow **does not require the RFC 8707 `resource`
+> parameter**, which removes the connection-layer blocker for the managed path (B1).
 
 ---
 
@@ -50,7 +71,7 @@ flowchart LR
 2. Set the MCP app's environment. For the **bundle-deployed** app, edit the
    `servicenow_mcp` app's `config.env` in **`resources/apps.yml`** — that is the env
    the deploy applies (the source `servicenow_mcp/app.yaml` is only for standalone/
-   local runs). The commented block there shows exactly where:
+   local runs):
    - `SERVICENOW_BACKEND=rest`
    - `SERVICENOW_INSTANCE=https://<your-instance>.service-now.com`
    - `SERVICENOW_OBO_TOKEN=<the service-account token>`
@@ -61,80 +82,105 @@ account. Honest framing: this proves the REST integration, **not** per-user OBO.
 
 ---
 
-## Path B — per-user OBO (recommended)
+## Path B — file the incident as the actual user
 
-This uses Databricks' **managed** OBO to an external service. Databricks holds the
-OAuth grant and provides each caller's downscoped ServiceNow token — the MCP never
-handles long-lived secrets. This is the differentiator worth showing.
+Today the agent→MCP hop is authenticated as the **orchestrator service principal**, so
+the MCP app sees the SP and the user is only `caller_id`. Both routes below change that
+so the incident is created as the real user. Both need the customer's ServiceNow
+instance; pick based on where you want the OAuth to live.
 
-> **Gap to close first (code):** the MCP calls ServiceNow with the token from
-> `_obo_token()`, which today only reads the static env var. For per-user OBO,
-> `_obo_token()` must return the **caller's** downscoped token that the MCP
-> Service / UC Connection provides *for the current request*. That per-request
-> wiring — per the [MCP Services docs](https://docs.databricks.com/aws/en/agents/mcp-tools/mcp-services) —
-> is the code step this path depends on (step 4). Steps 1–3 are the Databricks setup.
+> **The code gaps, by route:**
+> 1. `_obo_token()` (in `servicenow_mcp/server.py`) must return the caller's per-user
+>    ServiceNow token instead of the static env var — **both routes**.
+> 2. For **B2**, the orchestrator must forward the **user's** `x-forwarded-access-token`
+>    on the MCP call (change `_mcp_auth_headers()` / `_call_servicenow_mcp` in
+>    `agent/app.py`) instead of using the app SP — otherwise the MCP app still sees the SP.
 
-### 1. Register an OAuth app in ServiceNow *(ServiceNow admin)*
-In **System OAuth → Application Registry**, create an OAuth API endpoint for an
-external client. Record the **client id/secret**, **authorization** and **token**
-endpoints, and set the redirect URL Databricks gives you. Grant it the scope needed
-to create incidents.
+### B1 — managed (via the AI Gateway, U2M-per-user)
 
-### 2. Create a Unity Catalog HTTP Connection (`OAUTH_U2M`) *(Databricks)*
-Create a UC **HTTP Connection** to ServiceNow using **per-user OAuth (U2M)**, with
-the client id/secret and endpoints from step 1. Databricks stores the grant and,
-at call time, retrieves and injects the per-user credential — secrets stay in UC.
-See [Connect to external HTTP services](https://docs.databricks.com/aws/en/query-federation/http).
+Databricks holds the ServiceNow OAuth grant and injects each caller's per-user token;
+the app never stores long-lived secrets. **UC injects per-user credentials through a
+governed surface (the AI Gateway MCP Service, or SQL `http_request`) — not on a bare
+direct app call — so this route routes the write *through* the gateway.**
 
-### 3. Register this MCP as an AI Gateway MCP Service *(Databricks)*
-Register the deployed ServiceNow MCP app as a governed **MCP Service** backed by the
-connection from step 2, with authentication **OAuth U2M Per User**. The Gateway then
-routes the caller's identity to the connection and injects the downscoped ServiceNow
-token into the request.
-- [Connect agents to tools with MCP Services](https://docs.databricks.com/aws/en/agents/mcp-tools/mcp-services)
-- [Register an external MCP server](https://docs.databricks.com/aws/en/ai-gateway/register-mcp-service)
+1. **Register an OAuth app in ServiceNow** *(ServiceNow admin)* — record client id/secret,
+   authorization + token endpoints, the redirect URL Databricks gives you, and the scope
+   to create incidents.
+2. **Create a UC HTTP Connection to ServiceNow (`OAUTH_U2M` per-user)** *(Databricks)* with
+   those creds. See [Connect to external HTTP services](https://docs.databricks.com/aws/en/query-federation/http).
+3. **Register the MCP as an AI Gateway MCP Service backed by that connection, authentication
+   U2M-per-user** *(Databricks)* — the gateway routes the caller's identity to the connection
+   and injects the downscoped ServiceNow token.
+   [MCP Services](https://docs.databricks.com/aws/en/agents/mcp-tools/mcp-services) ·
+   [Register an external MCP server](https://docs.databricks.com/aws/en/ai-gateway/register-mcp-service)
+4. **Route the agent through the gateway** *(this repo)* — set `SERVICENOW_MCP_URL` to the
+   gateway MCP-service path (not the app URL), keep `user_api_scopes: [ai-gateway]` so the
+   user token reaches the gateway, and wire `_obo_token()` to the injected per-user token.
+   Set `SERVICENOW_BACKEND=rest` + `SERVICENOW_INSTANCE` in `resources/apps.yml`; redeploy.
+5. **Grants + consent** — users need access to the MCP Service; the first incident triggers
+   a one-time ServiceNow OAuth consent, then tokens mint/refresh.
 
-### 4. Point the MCP at your instance and wire the per-user token *(this repo)*
-Set `SERVICENOW_BACKEND=rest` and `SERVICENOW_INSTANCE=https://<your-instance>.service-now.com`
-in **`resources/apps.yml`** (the `servicenow_mcp` app's `config.env`, which the bundle
-deploys — not `servicenow_mcp/app.yaml`), and redeploy. Then complete the code
-extension point: make `_obo_token()` (in `servicenow_mcp/server.py`) return the
-**caller's** per-user ServiceNow token that the MCP Service / connection provides for
-the current request, instead of the static `SERVICENOW_OBO_TOKEN`. Until that wiring
-is in place the REST backend has no per-user token and **fails fast** with a clear
-error (it does not silently send an empty bearer).
+> **Verify before building (unverified today):** confirm the gateway actually forwards/injects
+> **per-user** identity with a header check. Our live test used an **M2M** connection and the
+> gateway presented a **shared service principal** — the U2M-per-user behavior needs its own
+> check before you rely on it.
 
-### 5. Grants and scopes *(Databricks)*
-- Grant the users (and the orchestrator app's service principal) `CAN_USE` on the
-  MCP app and `EXECUTE`/access on the MCP Service — deny-by-default: a user who
-  isn't granted it can't reach ServiceNow.
-- The orchestrator already declares `user_api_scopes: [ai-gateway]` so the user
-  token forwards to the Gateway ([Configure authorization in a Databricks app](https://docs.databricks.com/aws/en/dev-tools/databricks-apps/auth)).
+### B2 — custom (app-side OAuth, forward the user token)
 
-### 6. Consent and verify
-On a user's first incident, Databricks prompts a one-time ServiceNow OAuth consent;
-tokens are minted and refreshed thereafter. Then run the demo end to end:
+Self-contained; no reliance on gateway injection. The user's identity reaches the app on
+the direct call, and the app runs ServiceNow OAuth itself.
 
-1. "Investigate web-prod-04" → job runs, status streams.
-2. On completion the agent **proposes** the incident and waits.
-3. Click **Approve & file**.
-4. Open the incident in ServiceNow — it was created **with the actual user's
-   token** (`opened_by` reflects that user). Note: `caller_id` is a reference field
-   (sys_id); if you passed an email you may need a `sys_user` lookup to resolve it,
-   or the `caller` can land unset even though the request authenticated as the user.
+1. **Forward the user token on the agent→MCP hop** *(this repo)* — change `_mcp_auth_headers()`
+   / `_call_servicenow_mcp` in `agent/app.py` to send the caller's `x-forwarded-access-token`
+   (the orchestrator already reads it for the SQL OBO) instead of the app SP's credentials, so
+   the MCP app receives the real user via `x-forwarded-*`.
+2. **Grant the *user* `CAN_USE`** on the MCP app (not only the orchestrator SP) — the
+   forwarded-token call 403s otherwise.
+3. In the MCP server, run **ServiceNow OAuth U2M per user** (consent + token exchange); store
+   the token **server-side keyed to the authenticated Databricks identity — never to the
+   `caller_id` tool argument** (which is caller-asserted).
+4. `_obo_token()` returns that user's ServiceNow token; set `SERVICENOW_BACKEND=rest` +
+   `SERVICENOW_INSTANCE` in `resources/apps.yml`; redeploy.
 
-Creating the incident with the user's own token is the proof of criterion 3
-(end-to-end user identity to a downstream system) against a real external service.
+You own the OAuth implementation and its security, but avoid the UC-connection layer.
+
+### Prerequisite for both (and for today's stub/Path A)
+
+The **orchestrator app's service principal needs `CAN_USE` on the MCP app** — the wire call
+is SP-authenticated today, and stays SP-authenticated for B1. (This grant is also listed in
+the repo `CLAUDE.md`.) For **B2** you additionally grant the **user** `CAN_USE`.
+
+### Governance (optional for B2): register as an MCP Service
+
+Registering the app as an MCP Service adds tool discovery, **Service Policies**
+(allow / deny / **ask** on `create_incident`), usage tracking, and unified audit.
+
+- **B1 already registers it** (with a U2M connection) — that's how B1 carries identity.
+- For **B2** (direct, app-side), you can register the app *additionally* for governance, but
+  with an **M2M** connection it presents a **shared service principal** (verified — not the
+  user), so an M2M registration is a **governance** layer only, not the identity path.
+- Grant consumers **`EXECUTE` on the service** — **not** `USE CONNECTION` on the connection
+  (that bypasses tool selection + policies) — plus `USE CATALOG` / `USE SCHEMA` to traverse to it.
+
+Creating the incident with the user's own token is the proof of end-to-end user identity to a
+downstream system against a real external service.
 
 ---
 
 ## Notes
 
-- Nothing here changes the agent or the approval gate — only the MCP's backend and
-  how its token is sourced. The stub and both real paths present the identical
-  `create_incident` contract.
+- Nothing here changes the agent or the approval gate — only the MCP's backend, how its
+  token is sourced, and (for B2) how the agent→MCP hop is authenticated. The stub and the
+  real paths present the identical `create_incident` contract, and the **app-level
+  human-approval gate still guards the write** on every path (including B2's direct call,
+  where gateway Service Policies don't apply).
 - The MCP server code lives in `servicenow_mcp/` (`server.py`, `backend.py`); the
   backend switch is `SERVICENOW_BACKEND` (`stub` | `rest`).
-- ServiceNow is **not** a Databricks *managed*-OAuth provider today, so the custom
-  MCP + UC Connection is the current path; a managed ServiceNow connector is on the
-  roadmap.
+- **Verified finding:** the Databricks Apps proxy forwards *whatever identity the caller
+  authenticated as*. A live header check showed the **M2M gateway** hop presenting the
+  **connection's service principal**, and a **user-token** caller presenting the **user**.
+  The current orchestrator→MCP call uses the **app SP** (`_mcp_auth_headers`), so it presents
+  the SP too — that's why per-user filing needs B1 or B2, not just "call it directly."
+- ServiceNow is **not** a Databricks *managed*-OAuth provider today, so a customer-owned
+  UC HTTP Connection (B1) or app-side OAuth (B2) is the current path; a managed ServiceNow
+  connector is on the roadmap.
