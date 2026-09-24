@@ -71,6 +71,21 @@ databricks bundle run agent --profile <your-profile>
 databricks bundle run servicenow_mcp --profile <your-profile>
 ```
 
+This repo supports **two deploy paths** — use whichever fits:
+
+- **CLI / bundle** (above): `databricks bundle deploy` then `bundle run <app>` ships both
+  apps and the jobs from one bundle. Each app's `command`/`env` comes from the `config:`
+  block in `resources/apps.yml`.
+- **Manual / UI (source-only)**: deploy each app from the workspace UI, one at a time, from
+  its **own** source path — `job-status-agent` from the **repo root** (reads the root
+  `app.yaml`) and `servicenow-mcp` from **`servicenow_mcp/`** (reads `servicenow_mcp/app.yaml`).
+  Attach the Lakebase resource in the app's UI and fill in its env.
+
+Both produce the same running apps: the CLI path reads the bundle `config:` block and ignores
+`app.yaml`; the UI path reads `app.yaml` and ignores the bundle. **Keep each `app.yaml` in sync
+with its matching `config:` block** so the two behave identically. Full manual-deploy steps:
+[`docs/01-setup.md`](docs/01-setup.md) → *Manual (UI) deploy — one app at a time*.
+
 **Prerequisites that must exist before the app runs (not created by app code):**
 
 - The Lakebase `workflow_status` and `turns` tables (`lakebase/schema.sql`).
