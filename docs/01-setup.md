@@ -451,14 +451,65 @@ The bundle creates the apps and jobs, but **not** the Lakebase tables or the
 service-principal grants. Before the app works in a new environment, an admin
 must set these up (per environment):
 
-- Create the Lakebase **`workflow_status`** table (`lakebase/schema.sql`).
+- Create the Lakebase **`workflow_status`** (and **`turns`**) tables (`lakebase/schema.sql`).
 - Create and seed the admin-owned **`agent_config.jobs`** registry table with each
   workflow's **workspace-specific** `job_id` — the app service principal gets
   `SELECT` only, so it can't rewrite its own allowlist (see [the job
   registry](02-llm-agent.md)).
+- Create and seed the Unity Catalog **`auth_events`** table (your `AUTH_TABLE`) — the
+  login-event data the agent queries **as the calling user** (OBO). It is **not** created
+  by the bundle or any script in this repo; DDL + demo rows are below.
 - Grant the app's **service principal**: `CAN_MANAGE_RUN` on each job, `CAN_USE`
-  on the MCP app, DML on `workflow_status`, and `CAN_EDIT` on the MLflow
-  experiment.
+  on the MCP app, DML on `workflow_status`/`turns`, `CAN_EDIT` on the MLflow
+  experiment, and `EXECUTE` on the `system.ai.claude-sonnet-5` model service (the LLM
+  routes through Unity AI Gateway). Grant end **users** `SELECT` on `auth_events`
+  (the auth query runs as them, UC-enforced).
 
 **Recreating an app mints a new service principal**, so all grants above must be
 re-applied to it.
+
+## Create and seed the `auth_events` table (Unity Catalog)
+
+The investigation reads a login-event table — `AUTH_TABLE` (default
+`main.job_agent_demo.auth_events`). **Nothing in this repo creates or seeds it**;
+provide it yourself. This schema matches what `agent/investigation.py` queries — it
+uses `source_asn`, `user_id`, `event_type`, `source_ip`, `event_time`, `host`; the rest
+are realistic padding:
+
+```sql
+-- Point <catalog>.<schema> at whatever you set in AUTH_TABLE (resources/apps.yml).
+CREATE TABLE IF NOT EXISTS main.job_agent_demo.auth_events (
+  event_id     STRING,
+  event_time   TIMESTAMP,
+  user_id      STRING,
+  host         STRING,
+  source_ip    STRING,
+  source_asn   STRING,
+  event_type   STRING,
+  auth_method  STRING,
+  geo_country  STRING,
+  is_anomaly   BOOLEAN
+);
+
+-- Demo rows. The query surfaces off-hours (00:00–05:59), non-corporate-ASN
+-- (source_asn NOT LIKE 'AS-CORP%') logins for the host you investigate, so the
+-- anomalous rows below return findings for web-prod-04; the benign rows are dropped
+-- by the hour/ASN filters (so you can see the filter working).
+INSERT INTO main.job_agent_demo.auth_events VALUES
+  ('evt-0001', TIMESTAMP'2026-09-13 02:38:00', 'svc-deploy', 'web-prod-04', '185.220.101.69',  'AS-TOR-EXIT',   'login_success', 'password', 'RO', true),
+  ('evt-0002', TIMESTAMP'2026-09-13 03:12:00', 'svc-deploy', 'web-prod-04', '185.220.101.134', 'AS-TOR-EXIT',   'login_success', 'password', 'NL', true),
+  ('evt-0003', TIMESTAMP'2026-09-13 01:54:00', 'svc-deploy', 'web-prod-04', '45.134.22.10',    'AS-ANON-VPN',   'login_failed',  'password', 'RU', true),
+  ('evt-0004', TIMESTAMP'2026-09-13 04:07:00', 'svc-deploy', 'web-prod-04', '185.220.101.201', 'AS-TOR-EXIT',   'login_success', 'password', 'DE', true),
+  ('evt-0005', TIMESTAMP'2026-09-13 02:20:00', 'a.rivera',   'web-prod-04', '10.10.4.7',       'AS-CORP-VPN',   'login_success', 'sso',      'US', false),  -- benign: corp ASN → dropped by ASN filter
+  ('evt-0006', TIMESTAMP'2026-09-13 14:22:00', 'a.rivera',   'web-prod-04', '203.0.113.10',    'AS-CLOUD-EDGE', 'login_success', 'sso',      'US', false);  -- benign: daytime → dropped by hour filter
+```
+
+Then let users read it (the query is OBO, so the **user** — not the app SP — needs the grant):
+
+```sql
+GRANT SELECT ON main.job_agent_demo.auth_events TO `your-demo-group`;
+```
+
+> **Do not create `auth_events_stg`.** `jobs/failure_demo_job.py` names
+> `…auth_events_stg` inside a simulated `TABLE_OR_VIEW_NOT_FOUND` error solely to give the
+> diagnosis path a realistic failed run — it is meant to stay absent.
