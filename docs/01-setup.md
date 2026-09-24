@@ -513,3 +513,49 @@ GRANT SELECT ON main.job_agent_demo.auth_events TO `your-demo-group`;
 > **Do not create `auth_events_stg`.** `jobs/failure_demo_job.py` names
 > `…auth_events_stg` inside a simulated `TABLE_OR_VIEW_NOT_FOUND` error solely to give the
 > diagnosis path a realistic failed run — it is meant to stay absent.
+
+## Grants — who needs what
+
+The bundle grants **one** thing automatically: the Lakebase attach → `CAN_CONNECT_AND_CREATE`
+(via `resources.postgres` in `resources/apps.yml`). **Everything below is applied by an admin,
+per environment.** Get the app's service-principal id with
+`databricks apps get <app-name> --profile <p> -o json` → `service_principal_client_id`.
+
+**Agent app service principal — Unity Catalog / workspace:**
+
+| Grant | On | Where |
+|-------|-----|-------|
+| `EXECUTE` | `system.ai.claude-sonnet-5` model service | Serving/Gateway → Permissions (requires **Unity AI Gateway V2**). Without it every LLM call 403s. |
+| `CAN_MANAGE_RUN` | `investigation-job` **and** `failure-demo-job` | each Job → Permissions |
+| `CAN_USE` | the ServiceNow MCP app | Apps → Permissions |
+| `CAN_EDIT` | the MLflow experiment (`MLFLOW_EXPERIMENT`) | Experiment → Permissions |
+
+**Agent app service principal — Lakebase (Postgres)** — run as the project owner
+(`databricks psql --project <proj>` or psql as `databricks_superuser`):
+
+```sql
+GRANT SELECT, INSERT, UPDATE, DELETE ON workflow_status TO "<sp-client-id>";
+GRANT SELECT, INSERT, UPDATE, DELETE ON turns           TO "<sp-client-id>";
+GRANT USAGE ON SCHEMA agent_config TO "<sp-client-id>";
+GRANT SELECT ON agent_config.jobs  TO "<sp-client-id>";
+```
+(The app creates and owns the `agent_memory` checkpointer schema itself — no grant needed.)
+
+**Sweeper job run-as identity — Lakebase:**
+```sql
+GRANT SELECT, UPDATE ON turns TO "<sweeper-run-as-id>";
+```
+(If the sweeper runs as the same app SP, the `turns` grant above already covers it.)
+
+**End users (or a group) — Unity Catalog:** the auth query runs **on-behalf-of the user**, so
+the *user* — not the app SP — needs read on the auth table:
+```sql
+GRANT SELECT ON main.job_agent_demo.auth_events TO `your-demo-group`;
+```
+
+**Optional — only if you register the MCP as a governed MCP Service:** grant consumers
+`EXECUTE` on the MCP Service plus `USE CATALOG` / `USE SCHEMA` — **not** `USE CONNECTION`
+(that bypasses tool selection + Service Policies). See [`servicenow-connect.md`](servicenow-connect.md).
+
+**Recreating an app mints a new service principal** — re-apply every grant above (only the
+bundle's Lakebase attach re-applies itself on redeploy).
