@@ -73,13 +73,21 @@ databricks bundle run servicenow_mcp --profile <your-profile>
 
 **Prerequisites that must exist before the app runs (not created by app code):**
 
-- The Lakebase `workflow_status` table (`lakebase/schema.sql`).
+- The Lakebase `workflow_status` and `turns` tables (`lakebase/schema.sql`).
 - An admin-owned `agent_config.jobs` registry table (app service principal granted
   `SELECT` only), seeded with one row per workflow and its Databricks `job_id`.
   **Job ids are workspace-specific — reseed per environment.**
-- App service-principal grants: `CAN_MANAGE_RUN` on each job, `CAN_USE` on the MCP
-  app, DML on `workflow_status`, and `CAN_EDIT` on the MLflow experiment. Recreating
-  an app mints a new service principal, so these grants must be re-applied.
+- The Unity Catalog `auth_events` table (your `AUTH_TABLE`) — the login-event data the
+  agent queries as the user; **create and seed it yourself** (DDL + demo rows in
+  [`docs/01-setup.md`](docs/01-setup.md)).
+- **Unity AI Gateway V2** enabled, with `system.ai.claude-sonnet-5` reachable through it.
+- **Grants** (full list + runnable SQL in [`docs/01-setup.md`](docs/01-setup.md) → *Grants — who
+  needs what*): the app service principal needs `EXECUTE` on `system.ai.claude-sonnet-5`,
+  `CAN_MANAGE_RUN` on each job, `CAN_USE` on the MCP app, `CAN_EDIT` on the MLflow experiment,
+  DML on `workflow_status`/`turns`, and `SELECT` on `agent_config.jobs`; the sweeper's run-as
+  identity needs `SELECT`/`UPDATE` on `turns`; and end **users** need `SELECT` on `auth_events`
+  (queried on-behalf-of). Recreating an app mints a new service principal, so all grants must be
+  re-applied.
 
 ## Layout
 
