@@ -215,15 +215,23 @@ governed registry table at runtime (see [the job registry](02-llm-agent.md)) —
 the resource files here just *create* the jobs; the registry *maps names to
 their ids*.
 
-## Where the truth lives: bundle config vs. standalone `app.yaml`
+## Where the truth lives: bundle config vs. `app.yaml`
 
-You'll notice each app directory also contains an `app.yaml`
-(`agent/app.yaml`, `servicenow_mcp/app.yaml`). A standalone Databricks App
-normally reads its `command`/`env` from that file. **In this project the bundle
-supplies the `config:` block, so the bundle is the source of truth** — the
-deployed apps do not read these `app.yaml` files, and their contents don't match
-the bundle (e.g. `servicenow_mcp/app.yaml` lists a different `command`). To
-change how an app runs, edit `resources/apps.yml`.
+There are **two ways to deploy these apps, and each reads an app's `command`/`env`
+from a different place** — so keep them in sync:
+
+- **CLI / bundle** (`databricks bundle run <app>`) sends the **`config:` block in
+  `resources/apps.yml`** through the Apps API. On this path the apps do **not** read
+  `app.yaml`; to change how an app runs, edit `resources/apps.yml`.
+- **Manual / UI (source-only)** deploy reads **`app.yaml` at the root of the app's
+  source path** — the **root** `app.yaml` for the agent app, `servicenow_mcp/app.yaml`
+  for the MCP app (see [The deploy workflow](#the-deploy-workflow) below).
+
+So `app.yaml` and the matching `config:` block describe the same app two ways.
+**Edit both when you change how an app runs**, or the CLI and UI deploys diverge.
+(`agent/app.yaml` is a leftover one level *below* the agent app's source root, so
+Apps never reads it on either path — the agent app's UI manifest is the **root**
+`app.yaml`. It's kept only for reference and can be ignored or removed.)
 
 `.env.example` is a local-dev convenience and doesn't fully match the deployed
 app (e.g. it lists `INVESTIGATION_JOB_ID`, which the app doesn't read — job ids
@@ -251,6 +259,34 @@ databricks bundle deploy -t dev --profile <your-profile>
 databricks bundle run agent --profile <your-profile>
 databricks bundle run servicenow_mcp --profile <your-profile>
 ```
+
+### Manual (UI) deploy — one app at a time
+
+If you'd rather deploy from the workspace UI (a Git folder / source-only deploy)
+instead of the CLI, deploy **each app separately, from its own source path**, and
+let each read the `app.yaml` at that path's root:
+
+| App | Create the App with source path | Reads |
+|-----|--------------------------------|-------|
+| `job-status-agent` | the **repo root** | the root **`app.yaml`** |
+| `servicenow-mcp` | **`servicenow_mcp/`** | **`servicenow_mcp/app.yaml`** |
+
+Per app: in the workspace, create an App and deploy it from the source path above,
+then:
+
+- **Attach resources in the UI.** `app.yaml` doesn't declare resources, so on the
+  agent app add the **Lakebase (`postgres`)** resource in its **Resources** tab —
+  the CLI path gets this from the `resources:` block in `resources/apps.yml`.
+- **Fill in the env** in the root `app.yaml` (`WAREHOUSE_ID`, `AUTH_TABLE`,
+  `SERVICENOW_MCP_URL`, `MLFLOW_EXPERIMENT`) to match your workspace.
+- **Apply the same grants** an admin applies for the bundle path (see *Part C — Grants*).
+
+> **Don't cross the source paths.** Deploying `servicenow-mcp` from the repo root
+> makes it pick up the **root** `app.yaml` and start the FastAPI *agent* under the
+> MCP name/URL — it reports "started successfully" while serving the wrong app.
+
+The `config:` block in `resources/apps.yml` and these `app.yaml` files describe the
+same two apps; keep them in sync so the CLI and UI deploys behave identically.
 
 Local development uses `uv`: `uv sync` installs from `pyproject.toml` (resolving
 against `uv.lock`), and `uv run pytest -q` runs the offline test suite. In this

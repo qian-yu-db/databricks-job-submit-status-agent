@@ -14,7 +14,6 @@ sync:
     - .pytest_cache/**
     - "**/__pycache__/**"
     - docs/**
-    - .claude/**
     - tests/**
     - "*.md"
     - uv.lock

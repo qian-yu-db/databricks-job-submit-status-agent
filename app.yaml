@@ -1,0 +1,54 @@
+# Root app.yaml — entrypoint for the `job-status-agent` (agent) App on a
+# **manual / UI (source-only) deploy**: deploying straight from this Git folder in
+# the workspace, with no bundle involved.
+#
+# Why this file is at the repo ROOT (and not only agent/app.yaml): the agent App's
+# source path is the repo root, and Databricks Apps reads app.yaml only from the
+# ROOT of the source path. agent/app.yaml sits one level down, so Apps never sees
+# it — this root file is what makes a source-only UI deploy of the agent work.
+#
+# `databricks bundle run agent` does NOT use this file: it sends the `config:`
+# block from resources/apps.yml through the Apps API instead. So the CLI/bundle
+# path is unchanged — but KEEP THIS FILE AND THAT `config:` BLOCK IN SYNC, or the
+# CLI and UI deploys will start the app with different settings.
+#
+# WARNING: this file is for `job-status-agent` ONLY. Deploy the `servicenow-mcp`
+# App with servicenow_mcp/ as its source path (it has its own app.yaml). Pointing
+# that App at the repo root would pick up THIS file and start the FastAPI agent
+# under the MCP name/URL — it reports "started successfully" while serving the
+# wrong application.
+
+command: ["uvicorn", "agent.app:app", "--host", "0.0.0.0", "--port", "8000"]
+
+env:
+  # Your SQL warehouse id — the OBO auth-log query fails without it.
+  - name: WAREHOUSE_ID
+    value: "<your-sql-warehouse-id>"
+
+  # Your Unity Catalog auth-events table (see docs/01-setup.md to create + seed it).
+  - name: AUTH_TABLE
+    value: "main.job_agent_demo.auth_events"
+
+  - name: LAKEBASE_ENDPOINT
+    value: "projects/job-agent/branches/production/endpoints/primary"
+
+  # Plain `value:` (deliberately not `valueFrom:`): this app declares only a
+  # `postgres` resource, so a secret-backed valueFrom key would fail to resolve at
+  # deploy time. Set this to your deployed MCP app's URL
+  # (`databricks apps get servicenow-mcp -o json` → its url).
+  - name: SERVICENOW_MCP_URL
+    value: "https://servicenow-mcp-<workspace-id>.<region>.databricksapps.com"
+
+  - name: MLFLOW_EXPERIMENT
+    value: "/Users/you@example.com/job-status-agent"
+
+# PGHOST / PGDATABASE / PGUSER / PGPORT are auto-injected by the platform from the
+# attached `postgres` resource; PGPASSWORD is not (a short-lived token is fetched
+# per request). On a UI deploy, attach the Lakebase (postgres) resource in the
+# app's Resources tab — app.yaml does not declare resources.
+
+# Per-user OBO scopes: ai-gateway enables MCP tool calls; sql enables warehouse
+# queries as the caller.
+user_api_scopes:
+  - ai-gateway
+  - sql
