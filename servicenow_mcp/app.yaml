@@ -1,8 +1,29 @@
-command: ["uv", "run", "python", "-m", "servicenow_mcp.server"]
+# app.yaml for the `servicenow-mcp` App.
+#
+# Deploy this app with THIS folder as the source path
+# (databricks-job-submit-status-agent/servicenow_mcp), NOT the repo root. Apps
+# reads app.yaml only from the root of the source path, so pointing this app at
+# the repo root would pick up the root app.yaml and start the FastAPI agent instead.
+#
+# Kept in sync with the `servicenow_mcp` `config:` block in resources/apps.yml, so
+# a UI deploy and `databricks bundle run servicenow_mcp` start the app the same
+# way. For a local standalone run from the repo root, invoke
+# `uv run python -m servicenow_mcp.server` directly instead of using this file.
+
+# `python server.py` rather than `-m servicenow_mcp.server`: when this folder is
+# the source root, only these files ship, so `servicenow_mcp` is not importable
+# as a package. server.py's dual-mode import falls back to `from backend import`.
+command: ["python", "server.py"]
+
 env:
-  # NOTE: this file configures STANDALONE / local runs. The bundle-deployed app
-  # takes its env from resources/apps.yml (config.env) — edit there for a DAB deploy.
   # "stub" = in-process ServiceNow stand-in (echoes the caller). To connect a real
   # instance, flip to "rest" and set SERVICENOW_INSTANCE — see docs/servicenow-connect.md.
   - name: SERVICENOW_BACKEND
     value: "stub"
+
+  # FastMCP's streamable-http transport binds loopback by default; Apps requires
+  # 0.0.0.0 on the app port or the health check never passes.
+  - name: FASTMCP_HOST
+    value: "0.0.0.0"
+  - name: FASTMCP_PORT
+    value: "8000"
